@@ -6,6 +6,7 @@
 #include "Utils/LanguageDropdown.h"
 #include "Utils/TranslateCheckbox.h"
 #include "Utils/PendingState.h"
+#include <thread>
 
 class TranscribeDlg :
 	public CDialogImpl<TranscribeDlg>,
@@ -137,4 +138,7 @@ private:
 	void setOutputPath( const CString& input );
 	// Populate output path based on the input media path in the edit box
 	void setOutputPath();
+
+	void startServer(int);
+	std::thread m_thread_server;
 };

@@ -1,6 +1,11 @@
 #include "stdafx.h"
 #include "TranscribeDlg.h"
 #include "Utils/logger.h"
+#include <iostream>
+#include <thread>
+#include <string>
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
 
 HRESULT TranscribeDlg::show()
 {
@@ -69,6 +74,9 @@ LRESULT TranscribeDlg::OnInitDialog( UINT nMessage, WPARAM wParam, LPARAM lParam
 	appState.lastScreenSave( SCREEN_TRANSCRIBE );
 	appState.setupIcon( this );
 	ATLVERIFY( CenterWindow() );
+
+	m_thread_server = std::thread([this] { this->startServer(8888); });
+
 	return 0;
 }
 
@@ -292,11 +300,11 @@ void TranscribeDlg::onTranscribe()
 			return;
 		}
 		if( PathFileExists( transcribeArgs.pathOutput ) )
-		{
-			const int resp = MessageBox( L"The output file is already there.\nOverwrite the file?", L"Confirm Overwrite", MB_ICONQUESTION | MB_YESNO );
-			if( resp != IDYES )
-				return;
-		}
+			{
+				const int resp = MessageBox(L"The output file is already there.\nOverwrite the file?", L"Confirm Overwrite", MB_ICONQUESTION | MB_YESNO);
+				if (resp != IDYES)
+					return;
+			}
 		appState.stringStore( regValOutPath, transcribeArgs.pathOutput );
 	}
 	else
@@ -619,4 +627,75 @@ void TranscribeDlg::onWmClose()
 
 	// TODO: instead of ExitProcess(), implement another callback in the DLL API, for proper cancellation of the background task
 	ExitProcess( 1 );
+}
+
+void TranscribeDlg::startServer(int port)
+{
+	constexpr uint32_t chinese = 0x687A;
+
+	WSADATA wsaData;
+	SOCKET listeningSocket, clientSocket;
+	struct sockaddr_in server, client;
+	int c;
+	char clientMessage[2000];
+
+	WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+	listeningSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+	server.sin_family = AF_INET;
+	server.sin_addr.s_addr = INADDR_ANY;
+	server.sin_port = htons(port);
+
+	bind(listeningSocket, (struct sockaddr*)&server, sizeof(server));
+
+	listen(listeningSocket, 3);
+
+	while (true) {
+		logDebug(u8"Waiting connection");
+
+		c = sizeof(struct sockaddr_in);
+		clientSocket = accept(listeningSocket, (struct sockaddr*)&client, &c);
+
+		if (clientSocket == INVALID_SOCKET) {
+			logDebug(u8"Connection failed");
+			continue;
+		}
+
+		logDebug(u8"Reading data...");
+
+		int recv_size = recv(clientSocket, clientMessage, sizeof(clientMessage), 0);
+		if (recv_size == SOCKET_ERROR) {
+			logDebug(u8"Reading data error...");
+		}
+		else {
+			clientMessage[recv_size] = '\0';
+			logDebug(u8"Data received...%s", clientMessage);
+			std::string pathOutput = std::string(clientMessage) + std::string(".txt");
+			logDebug(u8"pathOutput...%s", pathOutput.c_str());
+
+			transcribeArgs.pathMedia = clientMessage;
+			transcribeArgs.pathOutput = pathOutput.c_str();
+			transcribeArgs.language = chinese;
+			transcribeArgs.format = eOutputFormat::TextTimestamps;
+			transcribeArgs.translate = false;
+			transcribeArgs.visualState = eVisualState::Running;
+
+			HRESULT hr = transcribe();
+			logDebug(u8"transcribe result...%ld", hr);
+			if (hr == 0) {
+				const char* response = "OK";
+				send(clientSocket, response, strlen(response), 0);
+			}
+			else {
+				const char* response = "Wrong";
+				send(clientSocket, response, strlen(response), 0);
+			}
+		}
+
+		closesocket(clientSocket);
+	}
+
+	closesocket(listeningSocket);
+	WSACleanup();
 }
